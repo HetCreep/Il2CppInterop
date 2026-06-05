@@ -130,7 +130,7 @@ public static class Pass79UnstripTypes
             if (!fieldDefinition.Signature!.FieldType.IsValueType())
                 return true;
 
-            if (fieldDefinition.Signature.FieldType.Namespace?.StartsWith("System") ?? false &&
+            if ((fieldDefinition.Signature.FieldType.Namespace?.StartsWith("System") ?? false) &&
                 HasNonBlittableFields(fieldDefinition.Signature.FieldType.Resolve()))
                 return true;
         }

@@ -110,7 +110,9 @@ public static class Pass16ScanMethodRefs
     {
         var bytes = (byte*)basePtr;
         var sequence = Encoding.UTF8.GetBytes(str);
-        for (var i = 0L; i < length; i++)
+        // i + j must stay within [0, length): cap i so the inner read bytes[i + (sequence.Length - 1)]
+        // never passes the end of the mapped view (an out-of-bounds read = AccessViolation).
+        for (var i = 0L; i <= length - sequence.Length; i++)
         {
             for (var j = 0; j < sequence.Length; j++)
                 if (bytes[i + j] != sequence[j])

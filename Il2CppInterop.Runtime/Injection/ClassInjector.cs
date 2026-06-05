@@ -452,7 +452,7 @@ public static unsafe partial class ClassInjector
 
             if (vTablePointer[i].method == default || vTablePointer[i].methodPtr == IntPtr.Zero)
             {
-                throw new Exception("No method found for vtable entry " + methodName);
+                throw new InvalidOperationException($"No concrete method implementation was found for vtable slot '{methodName}' while injecting type '{type.FullName}'.");
             }
         }
 
@@ -1147,7 +1147,7 @@ public static unsafe partial class ClassInjector
         var fullName = GetIl2CppTypeFullName(typePointer);
         var type = Type.GetType(fullName)
             ?? Type.GetType(fullName.Contains('.') ? "Il2Cpp" + fullName : "Il2Cpp." + fullName)
-            ?? throw new NullReferenceException($"Couldn't find System.Type for Il2Cpp type: {fullName}");
+            ?? throw new TypeLoadException($"Could not resolve the managed System.Type for IL2CPP type '{fullName}'. Ensure the corresponding interop assembly is loaded.");
 
         INativeTypeStruct wrappedType = UnityVersionHandler.Wrap(typePointer);
         if (wrappedType.Type == Il2CppTypeEnum.IL2CPP_TYPE_GENERICINST)

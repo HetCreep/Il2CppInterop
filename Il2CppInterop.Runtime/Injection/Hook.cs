@@ -20,7 +20,7 @@ namespace Il2CppInterop.Runtime.Injection
 
         public virtual void TargetMethodNotFound()
         {
-            throw new Exception($"Required target method {TargetMethodName} not found");
+            throw new NotSupportedException($"Required target method {TargetMethodName} was not found in the game binary. The current Unity/IL2CPP version may be unsupported.");
         }
 
         public void ApplyHook()

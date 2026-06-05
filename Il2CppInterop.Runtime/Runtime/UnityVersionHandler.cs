@@ -121,7 +121,7 @@ public static class UnityVersionHandler
 
         Logger.Instance.LogError("No direct for {TypeFullName} found for Unity {UnityVersion}; this likely indicates a severe error somewhere", typeof(T).FullName, Il2CppInteropRuntime.Instance.UnityVersion);
 
-        throw new ApplicationException("No handler");
+        throw new InvalidOperationException($"No native struct handler for {typeof(T).FullName} was found for Unity {Il2CppInteropRuntime.Instance.UnityVersion}. This Unity version may be unsupported.");
     }
 
     private static Type[] GetAllTypesSafe()

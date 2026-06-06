@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.Versioning;
 using Il2CppInterop.Common.XrefScans;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -21,10 +22,11 @@ internal class MemoryUtils
         // On newer Unity (6000.x) the loaded GameAssembly maps some pages PAGE_NOACCESS / guard pages; the raw
         // linear byte walk in FindSignatureInBlock dereferences them and throws a fatal AccessViolationException.
         // Use VirtualQuery to enumerate the module's regions and scan only the readable committed ones, skipping
-        // the rest -- without ever modifying page protections. VirtualQuery is Windows-only; off Windows (where this
-        // guard-page issue does not arise) fall back to the plain whole-module scan.
+        // the rest -- without ever modifying page protections. VirtualQuery and the TerraFX MEMORY_BASIC_INFORMATION
+        // fields are Windows-only (the struct is annotated for Windows 6.1+); elsewhere (where this guard-page issue
+        // does not arise) fall back to the plain whole-module scan.
         nint ptr = 0;
-        if (OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindowsVersionAtLeast(6, 1))
         {
             var regions = GetModuleRegions(module);
             foreach (var region in regions)
@@ -82,6 +84,7 @@ internal class MemoryUtils
     /// Walks the module's address space via <c>VirtualQuery</c>, collecting each memory region so the scan can pick
     /// the readable committed ones. Stops at the first <c>VirtualQuery</c> failure or once the module end is reached.
     /// </summary>
+    [SupportedOSPlatform("windows6.1")]
     internal static unsafe List<MEMORY_BASIC_INFORMATION> GetModuleRegions(ProcessModule module)
     {
         var regions = new List<MEMORY_BASIC_INFORMATION>();

@@ -28,7 +28,7 @@ internal class MemoryUtils
         nint ptr = 0;
         if (OperatingSystem.IsWindows())
         {
-            GetModuleRegions(module, out var regions);
+            var regions = GetModuleRegions(module);
             foreach (var region in regions)
             {
                 if (region.State != MEM_COMMIT || (region.Protect & PAGE_GUARD) != 0 ||
@@ -59,7 +59,11 @@ internal class MemoryUtils
     public static unsafe nint FindSignatureInBlock(nint block, long blockSize, char[] pattern, char[] mask,
         long sigOffset = 0)
     {
-        for (long address = 0; address < blockSize; address++)
+        // Stop at blockSize - mask.Length so the inner read (block + address + mask.Length - 1) never passes the
+        // end of this block. When the caller scans per-region (Unity 6 readable regions interleaved with guard /
+        // PAGE_NOACCESS pages), an overread off the tail would fault the adjacent page -> a fatal
+        // AccessViolationException that aborts the chainloader. If the block is smaller than the mask, scan nothing.
+        for (long address = 0; address <= blockSize - mask.Length; address++)
         {
             var found = true;
             for (uint offset = 0; offset < mask.Length; offset++)
@@ -76,10 +80,13 @@ internal class MemoryUtils
         return 0;
     }
 
-    // Walk the module's address space via VirtualQuery, collecting each region so the scan can pick the readable ones.
-    internal static void GetModuleRegions(ProcessModule module, out List<MEMORY_BASIC_INFORMATION> regions)
+    /// <summary>
+    /// Walks the module's address space via <c>VirtualQuery</c>, collecting each memory region so the scan can pick
+    /// the readable committed ones. Stops at the first <c>VirtualQuery</c> failure or once the module end is reached.
+    /// </summary>
+    internal static List<MEMORY_BASIC_INFORMATION> GetModuleRegions(ProcessModule module)
     {
-        regions = new List<MEMORY_BASIC_INFORMATION>();
+        var regions = new List<MEMORY_BASIC_INFORMATION>();
         var moduleEndAddress = (IntPtr)((long)module.BaseAddress + module.ModuleMemorySize);
         var currentAddress = module.BaseAddress;
         while (currentAddress.ToInt64() < moduleEndAddress.ToInt64())
@@ -92,6 +99,8 @@ internal class MemoryUtils
             regions.Add(memoryInfo);
             currentAddress = (IntPtr)((long)memoryInfo.BaseAddress + (long)memoryInfo.RegionSize);
         }
+
+        return regions;
     }
 
     public struct SignatureDefinition

@@ -3,52 +3,47 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
-using Il2CppInterop.Common;
 using Il2CppInterop.Common.XrefScans;
-using Microsoft.Extensions.Logging;
 
 namespace Il2CppInterop.Runtime;
 
 internal class MemoryUtils
 {
-    public const uint PAGE_EXECUTE_READWRITE = 0x40;
+    private const uint MEM_COMMIT = 0x1000;
+    private const uint PAGE_GUARD = 0x100;
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    internal static extern bool VirtualProtect(IntPtr lpAddress, uint dwSize, uint flNewProtect, out uint lpflOldProtect);
+    // Protections that permit reading: READONLY|READWRITE|WRITECOPY|EXECUTE_READ|EXECUTE_READWRITE|EXECUTE_WRITECOPY.
+    private const uint PAGE_READABLE = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
 
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern int VirtualQuery(IntPtr lpAddress, out MEMORY_BASIC_INFORMATION lpBuffer, uint dwLength);
 
     public static nint FindSignatureInModule(ProcessModule module, SignatureDefinition sigDef)
     {
-        // On newer Unity (6000.x) the loaded GameAssembly maps pages as PAGE_NOACCESS / guard pages, so the raw
-        // linear byte walk in FindSignatureInBlock dereferences protected memory and throws AccessViolationException
-        // (an unrecoverable, process-fatal CSE) before the caller's signature-exhaustion fallback can run. Temporarily
-        // make every region of the module readable for the duration of the scan, then restore the original protections.
-        // VirtualProtect/VirtualQuery are kernel32 (Windows-only) and PAGE_NOACCESS is a Windows page state, so this
-        // workaround runs on Windows only; on other platforms fall back to the direct scan (the prior behaviour).
-        List<MEMORY_BASIC_INFORMATION> protectedRegions = null;
-        var onWindows = OperatingSystem.IsWindows();
-        if (onWindows)
+        // On newer Unity (6000.x) the loaded GameAssembly maps some pages PAGE_NOACCESS / guard pages; the raw
+        // linear byte walk in FindSignatureInBlock dereferences them and throws a fatal AccessViolationException.
+        // Use VirtualQuery to enumerate the module's regions and scan only the readable committed ones, skipping
+        // the rest -- without ever modifying page protections. VirtualQuery is kernel32 (Windows-only); off Windows
+        // (where this guard-page issue does not arise) fall back to the plain whole-module scan.
+        nint ptr = 0;
+        if (OperatingSystem.IsWindows())
         {
-            GetModuleRegions(module, out protectedRegions);
-            SetModuleRegions(protectedRegions, PAGE_EXECUTE_READWRITE);
+            GetModuleRegions(module, out var regions);
+            foreach (var region in regions)
+            {
+                if (region.State != MEM_COMMIT || (region.Protect & PAGE_GUARD) != 0 ||
+                    (region.Protect & PAGE_READABLE) == 0)
+                    continue;
+                ptr = FindSignatureInBlock(region.BaseAddress, region.RegionSize.ToInt64(),
+                    sigDef.pattern, sigDef.mask, sigDef.offset);
+                if (ptr != 0)
+                    break;
+            }
         }
-        nint ptr;
-        try
+        else
         {
-            ptr = FindSignatureInBlock(
-                module.BaseAddress,
-                module.ModuleMemorySize,
-                sigDef.pattern,
-                sigDef.mask,
-                sigDef.offset
-            );
-        }
-        finally
-        {
-            if (onWindows)
-                SetModuleRegions(protectedRegions);
+            ptr = FindSignatureInBlock(module.BaseAddress, module.ModuleMemorySize,
+                sigDef.pattern, sigDef.mask, sigDef.offset);
         }
 
         if (ptr != 0 && sigDef.xref)
@@ -81,11 +76,10 @@ internal class MemoryUtils
         return 0;
     }
 
-    // Walk the module's address space via VirtualQuery, collecting each region so its protection can be flipped to
-    // readable for the scan and restored afterwards.
-    internal static void GetModuleRegions(ProcessModule module, out List<MEMORY_BASIC_INFORMATION> protectedRegions)
+    // Walk the module's address space via VirtualQuery, collecting each region so the scan can pick the readable ones.
+    internal static void GetModuleRegions(ProcessModule module, out List<MEMORY_BASIC_INFORMATION> regions)
     {
-        protectedRegions = new List<MEMORY_BASIC_INFORMATION>();
+        regions = new List<MEMORY_BASIC_INFORMATION>();
         var moduleEndAddress = (IntPtr)((long)module.BaseAddress + module.ModuleMemorySize);
         var currentAddress = module.BaseAddress;
         while (currentAddress.ToInt64() < moduleEndAddress.ToInt64())
@@ -95,27 +89,8 @@ internal class MemoryUtils
             if (result == 0)
                 break; // error, or reached the end of the module's mapped memory
 
-            protectedRegions.Add(memoryInfo);
+            regions.Add(memoryInfo);
             currentAddress = (IntPtr)((long)memoryInfo.BaseAddress + (long)memoryInfo.RegionSize);
-        }
-    }
-
-    // Apply newProtection to every collected committed region (or restore each region's original Protect when
-    // newProtection is null). Non-committed regions (MEM_FREE/MEM_RESERVE, Protect == 0) are skipped: VirtualProtect
-    // rejects them and they hold no scannable bytes.
-    internal static void SetModuleRegions(List<MEMORY_BASIC_INFORMATION> protectedRegions, uint? newProtection = null)
-    {
-        const uint MEM_COMMIT = 0x1000;
-        foreach (var region in protectedRegions)
-        {
-            if (region.State != MEM_COMMIT)
-                continue;
-
-            var result = VirtualProtect(region.BaseAddress, (uint)region.RegionSize,
-                newProtection ?? region.Protect, out _);
-            if (!result)
-                Logger.Instance.LogError("VirtualProtect failed for region 0x{Region:X} with error code {Error}",
-                    region.BaseAddress.ToInt64(), Marshal.GetLastWin32Error());
         }
     }
 

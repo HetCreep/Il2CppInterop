@@ -25,8 +25,15 @@ internal class MemoryUtils
         // linear byte walk in FindSignatureInBlock dereferences protected memory and throws AccessViolationException
         // (an unrecoverable, process-fatal CSE) before the caller's signature-exhaustion fallback can run. Temporarily
         // make every region of the module readable for the duration of the scan, then restore the original protections.
-        GetModuleRegions(module, out var protectedRegions);
-        SetModuleRegions(protectedRegions, PAGE_EXECUTE_READWRITE);
+        // VirtualProtect/VirtualQuery are kernel32 (Windows-only) and PAGE_NOACCESS is a Windows page state, so this
+        // workaround runs on Windows only; on other platforms fall back to the direct scan (the prior behaviour).
+        List<MEMORY_BASIC_INFORMATION> protectedRegions = null;
+        var onWindows = OperatingSystem.IsWindows();
+        if (onWindows)
+        {
+            GetModuleRegions(module, out protectedRegions);
+            SetModuleRegions(protectedRegions, PAGE_EXECUTE_READWRITE);
+        }
         nint ptr;
         try
         {
@@ -40,7 +47,8 @@ internal class MemoryUtils
         }
         finally
         {
-            SetModuleRegions(protectedRegions);
+            if (onWindows)
+                SetModuleRegions(protectedRegions);
         }
 
         if (ptr != 0 && sigDef.xref)

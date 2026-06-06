@@ -2,8 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Runtime.InteropServices;
 using Il2CppInterop.Common.XrefScans;
+using TerraFX.Interop.Windows;
+using static TerraFX.Interop.Windows.Windows;
 
 namespace Il2CppInterop.Runtime;
 
@@ -15,16 +16,13 @@ internal class MemoryUtils
     // Protections that permit reading: READONLY|READWRITE|WRITECOPY|EXECUTE_READ|EXECUTE_READWRITE|EXECUTE_WRITECOPY.
     private const uint PAGE_READABLE = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    internal static extern int VirtualQuery(IntPtr lpAddress, out MEMORY_BASIC_INFORMATION lpBuffer, uint dwLength);
-
-    public static nint FindSignatureInModule(ProcessModule module, SignatureDefinition sigDef)
+    public static unsafe nint FindSignatureInModule(ProcessModule module, SignatureDefinition sigDef)
     {
         // On newer Unity (6000.x) the loaded GameAssembly maps some pages PAGE_NOACCESS / guard pages; the raw
         // linear byte walk in FindSignatureInBlock dereferences them and throws a fatal AccessViolationException.
         // Use VirtualQuery to enumerate the module's regions and scan only the readable committed ones, skipping
-        // the rest -- without ever modifying page protections. VirtualQuery is kernel32 (Windows-only); off Windows
-        // (where this guard-page issue does not arise) fall back to the plain whole-module scan.
+        // the rest -- without ever modifying page protections. VirtualQuery is Windows-only; off Windows (where this
+        // guard-page issue does not arise) fall back to the plain whole-module scan.
         nint ptr = 0;
         if (OperatingSystem.IsWindows())
         {
@@ -34,7 +32,7 @@ internal class MemoryUtils
                 if (region.State != MEM_COMMIT || (region.Protect & PAGE_GUARD) != 0 ||
                     (region.Protect & PAGE_READABLE) == 0)
                     continue;
-                ptr = FindSignatureInBlock(region.BaseAddress, region.RegionSize.ToInt64(),
+                ptr = FindSignatureInBlock((nint)region.BaseAddress, (long)region.RegionSize,
                     sigDef.pattern, sigDef.mask, sigDef.offset);
                 if (ptr != 0)
                     break;
@@ -84,20 +82,20 @@ internal class MemoryUtils
     /// Walks the module's address space via <c>VirtualQuery</c>, collecting each memory region so the scan can pick
     /// the readable committed ones. Stops at the first <c>VirtualQuery</c> failure or once the module end is reached.
     /// </summary>
-    internal static List<MEMORY_BASIC_INFORMATION> GetModuleRegions(ProcessModule module)
+    internal static unsafe List<MEMORY_BASIC_INFORMATION> GetModuleRegions(ProcessModule module)
     {
         var regions = new List<MEMORY_BASIC_INFORMATION>();
-        var moduleEndAddress = (IntPtr)((long)module.BaseAddress + module.ModuleMemorySize);
-        var currentAddress = module.BaseAddress;
-        while (currentAddress.ToInt64() < moduleEndAddress.ToInt64())
+        var moduleEndAddress = (long)module.BaseAddress + module.ModuleMemorySize;
+        var currentAddress = (long)module.BaseAddress;
+        while (currentAddress < moduleEndAddress)
         {
-            var result = VirtualQuery(currentAddress, out var memoryInfo,
-                (uint)Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION)));
+            MEMORY_BASIC_INFORMATION memoryInfo;
+            var result = VirtualQuery((void*)currentAddress, &memoryInfo, (nuint)sizeof(MEMORY_BASIC_INFORMATION));
             if (result == 0)
                 break; // error, or reached the end of the module's mapped memory
 
             regions.Add(memoryInfo);
-            currentAddress = (IntPtr)((long)memoryInfo.BaseAddress + (long)memoryInfo.RegionSize);
+            currentAddress = (long)memoryInfo.BaseAddress + (long)memoryInfo.RegionSize;
         }
 
         return regions;
@@ -109,17 +107,5 @@ internal class MemoryUtils
         public string mask;
         public int offset;
         public bool xref;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct MEMORY_BASIC_INFORMATION
-    {
-        public IntPtr BaseAddress;
-        public IntPtr AllocationBase;
-        public uint AllocationProtect;
-        public IntPtr RegionSize;
-        public uint State;
-        public uint Protect;
-        public uint Type;
     }
 }

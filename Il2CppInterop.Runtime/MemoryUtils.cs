@@ -5,18 +5,11 @@ using System.Linq;
 using System.Runtime.Versioning;
 using Il2CppInterop.Common.XrefScans;
 using TerraFX.Interop.Windows;
-using static TerraFX.Interop.Windows.Windows;
 
 namespace Il2CppInterop.Runtime;
 
 internal class MemoryUtils
 {
-    private const uint MEM_COMMIT = 0x1000;
-    private const uint PAGE_GUARD = 0x100;
-
-    // Protections that permit reading: READONLY|READWRITE|WRITECOPY|EXECUTE_READ|EXECUTE_READWRITE|EXECUTE_WRITECOPY.
-    private const uint PAGE_READABLE = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
-
     public static unsafe nint FindSignatureInModule(ProcessModule module, SignatureDefinition sigDef)
     {
         // On newer Unity (6000.x) the loaded GameAssembly maps some pages PAGE_NOACCESS / guard pages; the raw
@@ -28,11 +21,14 @@ internal class MemoryUtils
         nint ptr = 0;
         if (OperatingSystem.IsWindowsVersionAtLeast(6, 1))
         {
+            // Protections that permit reading; TerraFX defines no single composite of these.
+            const uint pageReadable = PAGE.PAGE_READONLY | PAGE.PAGE_READWRITE | PAGE.PAGE_WRITECOPY |
+                                      PAGE.PAGE_EXECUTE_READ | PAGE.PAGE_EXECUTE_READWRITE | PAGE.PAGE_EXECUTE_WRITECOPY;
             var regions = GetModuleRegions(module);
             foreach (var region in regions)
             {
-                if (region.State != MEM_COMMIT || (region.Protect & PAGE_GUARD) != 0 ||
-                    (region.Protect & PAGE_READABLE) == 0)
+                if (region.State != MEM.MEM_COMMIT || (region.Protect & PAGE.PAGE_GUARD) != 0 ||
+                    (region.Protect & pageReadable) == 0)
                     continue;
                 ptr = FindSignatureInBlock((nint)region.BaseAddress, (long)region.RegionSize,
                     sigDef.pattern, sigDef.mask, sigDef.offset);
@@ -92,8 +88,8 @@ internal class MemoryUtils
         var currentAddress = (long)module.BaseAddress;
         while (currentAddress < moduleEndAddress)
         {
-            MEMORY_BASIC_INFORMATION memoryInfo;
-            var result = VirtualQuery((void*)currentAddress, &memoryInfo, (nuint)sizeof(MEMORY_BASIC_INFORMATION));
+            MEMORY_BASIC_INFORMATION memoryInfo = default;
+            var result = Windows.VirtualQuery((void*)currentAddress, &memoryInfo, (nuint)sizeof(MEMORY_BASIC_INFORMATION));
             if (result == 0)
                 break; // error, or reached the end of the module's mapped memory
 
